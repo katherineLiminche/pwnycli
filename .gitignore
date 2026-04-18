@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+
+data/
+*.pcap
+*.22000
+*.cap
+
+*.db
+
+tmp_autopwn.txt
+
+.DS_Store
+

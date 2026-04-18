@@ -1,0 +1,375 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import sqlite3
+import shutil
+import time
+from pathlib import Path
+
+BASE = Path.home() / "pwnagotchi"
+
+SCRIPTS = {
+    "transfer": BASE / "scripts/1_transfer.py",
+    "analyze": BASE / "scripts/2_analyze.py",
+    "convert": BASE / "scripts/3_convert.py",
+    "crack": BASE / "scripts/4_crack.py",
+    "cleanup": BASE / "scripts/5_cleanup.py",
+}
+
+PIPELINE = ["transfer", "analyze", "convert", "crack", "cleanup"]
+
+DATA = BASE / "data"
+DB = BASE / "db/networks.db"
+
+
+def run_script(name):
+    script = SCRIPTS[name]
+
+    if not script.exists():
+        print(f"Missing script: {script}")
+        return
+
+    print(f"\n=== {name} ===")
+
+    subprocess.run(
+        ["python3", str(script)],
+        check=True
+    )
+
+
+def run_pipeline():
+    for step in PIPELINE:
+        run_script(step)
+
+
+def doctor():
+
+    print("Running diagnostics\n")
+
+    tools = [
+        "ssh",
+        "scp",
+        "hashcat",
+        "hcxpcapngtool"
+    ]
+
+    for tool in tools:
+
+        if shutil.which(tool):
+            print(f"[OK] {tool}")
+        else:
+            print(f"[MISSING] {tool}")
+
+    print()
+
+    dirs = [
+        DATA / "incoming",
+        DATA / "good_pcaps",
+        DATA / "bad_pcaps",
+        DATA / "hashes"
+    ]
+
+    for d in dirs:
+
+        if d.exists():
+            print(f"[OK] {d}")
+        else:
+            print(f"[MISSING] {d}")
+
+    print()
+
+    if DB.exists():
+        print("[OK] database")
+    else:
+        print("[MISSING] database")
+
+
+def status():
+
+    incoming = len(list((DATA / "incoming").glob("*.pcap")))
+    good = len(list((DATA / "good_pcaps").glob("*.pcap")))
+    bad = len(list((DATA / "bad_pcaps").glob("*.pcap")))
+    hashes = len(list((DATA / "hashes").glob("*.22000")))
+
+    print("Pipeline status\n")
+
+    print(f"incoming pcaps : {incoming}")
+    print(f"good pcaps     : {good}")
+    print(f"bad pcaps      : {bad}")
+    print(f"hashes         : {hashes}")
+
+
+def stats():
+
+    if not DB.exists():
+        print("Database not found")
+        return
+
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) FROM captures")
+    total = cur.fetchone()[0]
+
+    cur.execute("SELECT COUNT(*) FROM captures WHERE password IS NOT NULL")
+    cracked = cur.fetchone()[0]
+
+    conn.close()
+
+    rate = 0
+
+    if total:
+        rate = (cracked / total) * 100
+
+    print("\nNetwork statistics\n")
+
+    print(f"total networks : {total}")
+    print(f"cracked        : {cracked}")
+    print(f"success rate   : {rate:.2f}%")
+
+
+def loop(delay):
+
+    print("Starting loop mode\n")
+
+    while True:
+
+        run_pipeline()
+
+        print(f"\nsleeping {delay} seconds\n")
+
+        time.sleep(delay)
+
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description="Pwnagotchi cracking pipeline controller"
+    )
+
+    parser.add_argument(
+        "command",
+        choices=[
+            "run",
+            "transfer",
+            "analyze",
+            "convert",
+            "crack",
+            "cleanup",
+            "doctor",
+            "status",
+            "stats",
+            "watch",
+            "purge",
+            "export",
+            "bench",
+            "configure",
+            "login"
+        ]
+    )
+
+    parser.add_argument(
+        "--loop",
+        action="store_true"
+    )
+
+    parser.add_argument(
+        "--delay",
+        type=int,
+        default=300
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "run":
+
+        if args.loop:
+            loop(args.delay)
+        else:
+            run_pipeline()
+
+    elif args.command in SCRIPTS:
+        run_script(args.command)
+
+    elif args.command == "doctor":
+        doctor()
+
+    elif args.command == "status":
+        status()
+
+    elif args.command == "stats":
+        stats()
+    elif args.command == "watch":
+        watch()
+
+    elif args.command == "purge":
+        purge()
+
+    elif args.command == "export":
+        export()
+
+    elif args.command == "bench":
+        bench()
+    elif args.command in ("configure", "login"):
+        from config import configure
+        configure(force=True)
+
+
+def autopwn():
+
+    print("Generating smart wordlist")
+
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    cur.execute("SELECT ssid FROM captures WHERE password IS NULL")
+
+    ssids = [row[0] for row in cur.fetchall() if row[0]]
+
+    conn.close()
+
+    wordlist = BASE / "tmp_autopwn.txt"
+
+    words = set()
+
+    for ssid in ssids:
+
+        base = ssid.lower()
+
+        clean = base.replace("-", "").replace("_", "")
+
+        words.add(base)
+        words.add(clean)
+
+        for year in ["2024", "2025", "2026"]:
+
+            words.add(base + year)
+            words.add(clean + year)
+
+        for num in ["123", "1234", "12345"]:
+
+            words.add(base + num)
+            words.add(clean + num)
+
+    with open(wordlist, "w") as f:
+
+        for w in words:
+
+            if len(w) >= 8:
+                f.write(w + "\n")
+
+    print(f"Generated {len(words)} candidates")
+
+    subprocess.run([
+        "hashcat",
+        "-m",
+        "22000",
+        str(BASE / "data/hashes/*.22000"),
+        str(wordlist)
+    ])
+
+def watch():
+
+    import time
+
+    print("Watching pipeline (Ctrl+C to exit)\n")
+
+    while True:
+
+        incoming = len(list((DATA / "incoming").glob("*.pcap")))
+        good = len(list((DATA / "good_pcaps").glob("*.pcap")))
+        bad = len(list((DATA / "bad_pcaps").glob("*.pcap")))
+        hashes = len(list((DATA / "hashes").glob("*.22000")))
+
+        cracked = 0
+
+        if DB.exists():
+
+            conn = sqlite3.connect(DB)
+            cur = conn.cursor()
+
+            cur.execute(
+                "SELECT COUNT(*) FROM captures WHERE password IS NOT NULL"
+            )
+
+            cracked = cur.fetchone()[0]
+
+            conn.close()
+
+        print(
+            f"\rincoming:{incoming}  good:{good}  bad:{bad}  hashes:{hashes}  cracked:{cracked}",
+            end=""
+        )
+
+        time.sleep(5)
+
+def purge():
+
+    print("Purging broken files\n")
+
+    removed = 0
+
+    for hashfile in (DATA / "hashes").glob("*.22000"):
+
+        if hashfile.stat().st_size == 0:
+
+            print("Removing empty hash:", hashfile.name)
+            hashfile.unlink()
+            removed += 1
+
+    for pcap in (DATA / "good_pcaps").glob("*.pcap"):
+
+        hashfile = DATA / "hashes" / (pcap.stem + ".22000")
+
+        if not hashfile.exists():
+
+            print("Removing orphan capture:", pcap.name)
+            pcap.unlink()
+            removed += 1
+
+    print(f"\nRemoved {removed} files")
+
+def export():
+
+    if not DB.exists():
+
+        print("Database not found")
+        return
+
+    outfile = BASE / "cracked_networks.txt"
+
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT ssid, password FROM captures WHERE password IS NOT NULL"
+    )
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    with open(outfile, "w") as f:
+
+        for ssid, password in rows:
+
+            f.write(f"{ssid}:{password}\n")
+
+    print(f"Exported {len(rows)} networks → {outfile}")
+
+def bench():
+
+    print("Running hashcat benchmark\n")
+
+    subprocess.run(
+        [
+            "hashcat",
+            "-b",
+            "-m",
+            "22000"
+        ]
+    )
+
+if __name__ == "__main__":
+    main()
