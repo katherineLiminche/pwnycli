@@ -47,6 +47,31 @@ def run_pipeline():
     for step in PIPELINE:
         run_script(step)
 
+def init():
+    dirs = [
+        DATA / "incoming",
+        DATA / "good_pcaps",
+        DATA / "bad_pcaps",
+        DATA / "hashes",
+        BASE / "db",
+    ]
+    for d in dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        print(f"[OK] {d}")
+
+    conn = sqlite3.connect(DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS captures (
+            id       INTEGER PRIMARY KEY,
+            ssid     TEXT,
+            bssid    TEXT,
+            password TEXT,
+            seen_at  TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+    print("[OK] database")
 
 def doctor():
     print("Running diagnostics\n")
@@ -268,6 +293,7 @@ def main():
             "export",
             "bench",
             "autopwn",
+            "init",
         ]
     )
 
@@ -293,7 +319,7 @@ def main():
     elif args.command == "export":  export()
     elif args.command == "bench":   bench()
     elif args.command == "autopwn": autopwn()
-
+    elif args.command == "init": init()
 
 if __name__ == "__main__":
     main()
