@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pwnycli"
+version = "0.1.0"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+
+[project.scripts]
+pwnycli = "pwnycli.__main__:main"

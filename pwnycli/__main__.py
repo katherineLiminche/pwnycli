@@ -22,13 +22,6 @@ SCRIPTS = {
     "cleanup":  SCRIPTS_DIR / "5_cleanup.py",
 }
 
-BREW_HINTS = {
-    "hashcat":       "hashcat",
-    "hcxpcapngtool": "hcxtools",
-    "ssh":           "openssh",
-    "scp":           "openssh",
-}
-
 PIPELINE = ["transfer", "analyze", "convert", "crack", "cleanup"]
 
 DATA = BASE / "data"
@@ -89,10 +82,7 @@ def doctor():
         if shutil.which(tool):
             print(f"[OK] {tool}")
         else:
-            if sys.platform == "darwin":
-                print(f"[MISSING] {tool}  →  brew install {BREW_HINTS[tool]}")
-            else:
-                print(f"[MISSING] {tool}")
+            print(f"[MISSING] {tool}")
 
     print()
 
@@ -115,6 +105,7 @@ def doctor():
         print("[OK] database")
     else:
         print("[MISSING] database")
+
 
 def status():
     incoming = len(list((DATA / "incoming").glob("*.pcap")))
